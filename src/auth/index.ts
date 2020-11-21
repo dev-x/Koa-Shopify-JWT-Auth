@@ -1,8 +1,12 @@
 import querystring from 'querystring';
 import crypto from 'crypto';
-const nonce = 'test';
+import nonce from 'nonce';
+
 import { OAuthStartOptions /* , AccessMode */ /* , NextFunction */ } from '../types';
 import { Context, Next as NextFunction } from 'koa';
+import getCookieOptions from './cookie-options';
+
+const createNonce = nonce();
 
 export function genShopifyAuthLink({
   apiKey,
@@ -11,6 +15,7 @@ export function genShopifyAuthLink({
   scopes,
   shop,
   host,
+  state,
 }: any) {
 
   // const nonce = config.app.nonce;
@@ -19,7 +24,7 @@ export function genShopifyAuthLink({
     client_id: apiKey,
     scope: scopes.join(','), // per-user
     redirect_uri: `https://${host}/auth/callback`,
-    state: nonce,
+    state,
     'grant_options[]': accessMode,
   };
 
@@ -43,9 +48,13 @@ export function verifyShopifyQueryString(ctx: Context, secret: string) {
 }
 
 export async function processCallback(ctx: Context, apiKey: string, secret: string) {
+  const shopifyNonce = ctx.cookies.get('shopifyNonce');
+  if (!shopifyNonce || shopifyNonce !== ctx.query.state) {
+    throw new Error('Request origin could not be verified');
+  }
+
   if (
-    ctx.query.state === nonce
-    && typeof ctx.query.shop === 'string'
+    typeof ctx.query.shop === 'string'
     // && ctx.query.shop.match(/(https|http)\:\/\/[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com[\/]?/)
     && ctx.query.shop.match(/[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com[\/]?/)
     && verifyShopifyQueryString(ctx, secret)
@@ -88,6 +97,7 @@ export default function createShopifyAuth({
   afterAuth,
   stateName = 'session',
  }: OAuthStartOptions) {
+   console.log('here 2')
   return async (ctx: Context, next: NextFunction) => {
     if (ctx.path === '/auth' || ctx.path === '/auth/') {
       if (!ctx.query.shop) {
@@ -95,7 +105,10 @@ export default function createShopifyAuth({
         ctx.body = 'Bad request';
         return;
       }
-      const { host } = ctx;
+      const { host, cookies } = ctx;
+      const state = createNonce();
+      cookies.set('shopifyNonce', state, getCookieOptions(ctx));
+    
       ctx.redirect(exports.genShopifyAuthLink({
         apiKey,
         secret,
@@ -103,6 +116,7 @@ export default function createShopifyAuth({
         scopes,
         host,
         shop: ctx.query.shop,
+        state,
       }));
       return;
     }
